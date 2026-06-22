@@ -14,7 +14,9 @@
     "react-router-dom": "^6.26.0",
     "jspdf": "^2.5.1",
     "lucide-react": "^0.383.0",
-    "@supabase/supabase-js": "^2.45.4"
+    "@supabase/supabase-js": "^2.45.4",
+    "openai": "^4.67.3",
+    "resend": "^4.0.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
