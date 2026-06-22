@@ -40,9 +40,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ es_documento_valido: false, error: 'Falta la imagen del documento' });
   }
 
-  // Límite básico de tamaño (≈8MB en base64) para evitar payloads abusivos.
-  if (imageBase64.length > 11_000_000) {
-    return res.status(413).json({ es_documento_valido: false, error: 'La imagen es demasiado grande' });
+  // Límite alineado con el límite real de payload de Vercel (4.5MB en plan Hobby).
+  // El frontend ya comprime la imagen antes de enviarla (ver imageCompression.js),
+  // así que llegar aquí con un payload de este tamaño es señal de una foto muy
+  // pesada incluso comprimida (poco común, pero se valida igual).
+  if (imageBase64.length > 4_000_000) {
+    return res.status(413).json({
+      es_documento_valido: false,
+      error: 'La imagen es demasiado grande incluso comprimida. Intenta con otra foto.'
+    });
   }
 
   const supabaseAdmin = createClient(

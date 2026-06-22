@@ -4,6 +4,7 @@ import SignatureCanvas from './SignatureCanvas.jsx';
 import NotarySeal from './NotarySeal.jsx';
 import { formatCOP } from '../lib/amortization.js';
 import { buildContractHash, fetchClientIP } from '../lib/crypto.js';
+import { fileToCompressedBase64 } from '../lib/imageCompression.js';
 import { downloadPagarePDF, pagarePDFBase64 } from '../lib/generatePagarePDF.js';
 
 /**
@@ -33,13 +34,19 @@ export default function VirtualNotaryView({ pact, onPactSealed }) {
     setKycError('');
 
     try {
-      const base64 = await fileToBase64(file);
+      const base64 = await fileToCompressedBase64(file);
 
       const res = await fetch('/api/verify-kyc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64: base64, pactId: pact.id })
       });
+
+      if (res.status === 413) {
+        setKycStatus('error');
+        setKycError('La imagen sigue siendo muy pesada incluso comprimida. Intenta con otra foto o reduce la resolución de tu cámara.');
+        return;
+      }
 
       if (!res.ok) throw new Error('Error de red al verificar el documento');
       const data = await res.json();
@@ -280,11 +287,4 @@ function translateFreq(freq) {
   return map[freq] || 'mensual';
 }
 
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+
