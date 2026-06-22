@@ -81,7 +81,7 @@ export default async function handler(req, res) {
     });
 
     const completion = await zhipu.chat.completions.create({
-      model: 'glm-4v',
+      model: 'glm-4.6v',
       messages: [
         {
           role: 'user',
@@ -94,7 +94,10 @@ export default async function handler(req, res) {
           ]
         }
       ],
-      temperature: 0.1
+      temperature: 0.1,
+      // Desactivado: esta es una extracción de OCR simple, no requiere razonamiento
+      // profundo. Activar thinking solo añade latencia y costo sin mejorar el resultado.
+      thinking: { type: 'disabled' }
     });
 
     const rawText = completion.choices?.[0]?.message?.content?.trim() || '';
@@ -123,7 +126,17 @@ export default async function handler(req, res) {
       tempImagePath // se devuelve solo para permitir su borrado posterior desde el cliente
     });
   } catch (err) {
-    console.error('[verify-kyc] Error inesperado:', err);
+    // Log estructurado: si es un error de la API de Zhipu (BadRequestError, AuthError, etc.)
+    // expone status + código + mensaje, que es lo más útil para diagnosticar rápido
+    // problemas como modelo inválido, key inválida, o sin saldo — sin tener que leer
+    // el stack trace completo cada vez.
+    if (err?.status) {
+      console.error(
+        `[verify-kyc] Error de la API de Zhipu — status=${err.status} code=${err.code || err.error?.code} message=${err.error?.message || err.message}`
+      );
+    } else {
+      console.error('[verify-kyc] Error inesperado:', err);
+    }
     if (tempImagePath) await safeDeleteTempImage(supabaseAdmin, tempImagePath);
     return res.status(500).json({
       es_documento_valido: false,
