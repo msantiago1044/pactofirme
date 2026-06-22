@@ -1,0 +1,91 @@
+{
+  "id": "a3f1c8e2-7b4d-4e6a-9c0d-1f2e3a4b5c6d",
+  "lender_name": "Marcelo Restrepo",
+  "lender_email": "marcelo@ejemplo.com",
+  "borrower_email": "deudor.demo@ejemplo.com",
+  "amount": 1800000,
+  "interest_rate": 2.0,
+  "frequency": "monthly",
+  "installments_count": 6,
+  "installment_amount": 336000,
+  "total_to_pay": 1926000,
+  "status": "active",
+  "contract_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
+  "created_at": "2026-01-22T15:30:00.000Z",
+  "viewer_role": "lender",
+  "seal": {
+    "nombreCompleto": "Juan Carlos Pérez Gómez",
+    "cedula": "1098765432",
+    "ip": "190.85.23.114",
+    "timestampUTC": "2026-01-22T15:42:07.000Z",
+    "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85"
+  },
+  "installments": [
+    {
+      "installment_number": 1,
+      "due_date": "2026-02-22",
+      "capital": 300000.0,
+      "interest": 36000.0,
+      "amount_due": 336000.0,
+      "remaining_balance": 1500000.0,
+      "status": "paid",
+      "paid_at": "2026-02-20",
+      "proof_image_url": "https://placehold.co/400x500?text=Comprobante+1"
+    },
+    {
+      "installment_number": 2,
+      "due_date": "2026-03-22",
+      "capital": 300000.0,
+      "interest": 30000.0,
+      "amount_due": 330000.0,
+      "remaining_balance": 1200000.0,
+      "status": "paid",
+      "paid_at": "2026-03-21",
+      "proof_image_url": "https://placehold.co/400x500?text=Comprobante+2"
+    },
+    {
+      "installment_number": 3,
+      "due_date": "2026-04-22",
+      "capital": 300000.0,
+      "interest": 24000.0,
+      "amount_due": 324000.0,
+      "remaining_balance": 900000.0,
+      "status": "paid",
+      "paid_at": "2026-04-19",
+      "proof_image_url": "https://placehold.co/400x500?text=Comprobante+3"
+    },
+    {
+      "installment_number": 4,
+      "due_date": "2026-05-22",
+      "capital": 300000.0,
+      "interest": 18000.0,
+      "amount_due": 318000.0,
+      "remaining_balance": 600000.0,
+      "status": "reviewing",
+      "paid_at": null,
+      "proof_image_url": "https://placehold.co/400x500?text=Comprobante+4"
+    },
+    {
+      "installment_number": 5,
+      "due_date": "2026-06-22",
+      "capital": 300000.0,
+      "interest": 12000.0,
+      "amount_due": 312000.0,
+      "remaining_balance": 300000.0,
+      "status": "pending",
+      "paid_at": null,
+      "proof_image_url": null
+    },
+    {
+      "installment_number": 6,
+      "due_date": "2026-07-22",
+      "capital": 300000.0,
+      "interest": 6000.0,
+      "amount_due": 306000.0,
+      "remaining_balance": 0.0,
+      "status": "pending",
+      "paid_at": null,
+      "proof_image_url": null
+    }
+  ]
+}
