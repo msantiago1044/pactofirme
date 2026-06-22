@@ -1,8 +1,16 @@
 /**
  * /api/verify-kyc.js
  * Serverless function (Vercel) que recibe una foto de cédula en Base64, la sube a
- * almacenamiento TEMPORAL en Supabase Storage, y la envía a GLM-4V (ZhipuAI) para
- * extraer número de documento y nombre completo.
+ * almacenamiento TEMPORAL en Supabase Storage, y la envía a GLM-4.6V-Flash (ZhipuAI)
+ * para extraer número de documento y nombre completo.
+ *
+ * NOTA SOBRE EL MODELO: se usa `glm-4.6v-flash` (variante gratuita de 9B) en vez de
+ * `glm-4.6v` (106B, de pago). La documentación oficial de Zhipu lista justo el OCR de
+ * documentos de identidad como caso de uso recomendado para esta variante, y soporta
+ * fotos con mala iluminación/ángulo torcido — el escenario típico de un usuario
+ * fotografiando su cédula con el celular. Si en producción se necesita mayor precisión
+ * (ej. cédulas muy deterioradas o letra manuscrita compleja), considerar cambiar a
+ * `glm-4.6v` y recargar saldo en el panel de Zhipu — el cambio es solo este string.
  *
  * RETENCIÓN DE DATOS: la imagen se guarda únicamente para permitir su revisión humana
  * en caso de disputa antes de la firma. Se borra automáticamente:
@@ -20,6 +28,14 @@ import { createClient } from '@supabase/supabase-js';
 
 const ZHIPU_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4/';
 const KYC_BUCKET = 'kyc-temp';
+
+// Modelos de visión 100% gratuitos confirmados en la documentación oficial de Zhipu
+// (https://docs.bigmodel.cn/cn/guide/models/free/...). Se intenta primero el modelo
+// más reciente; si responde con error de cuota/saldo (status 429, code 1113), se
+// reintenta automáticamente con el modelo de respaldo, evitando que un agotamiento
+// puntual de cupo tumbe todo el flujo de KYC.
+const FREE_VISION_MODEL = 'glm-4.6v-flash';
+const FREE_VISION_MODEL_FALLBACK = 'glm-4v-flash'; // el primer modelo gratuito de Zhipu
 
 const KYC_SYSTEM_PROMPT = `Eres un oficial de cumplimiento (KYC) digital. Analiza la imagen adjunta. Verifica que corresponda a un documento de identidad oficial (Cédula de ciudadanía, DNI o Pasaporte). Extrae estrictamente estos dos datos y devuélvelos en un JSON limpio:
 {
@@ -74,31 +90,15 @@ export default async function handler(req, res) {
       tempImagePath = null;
     }
 
-    // 2) Llamar a GLM-4V (ZhipuAI) vía SDK compatible con OpenAI.
+    // 2) Llamar a GLM (ZhipuAI) vía SDK compatible con OpenAI. Si el modelo principal
+    //    responde con error de cuota/saldo, se reintenta una vez con el modelo de respaldo
+    //    antes de rendirse — ambos son gratuitos según la documentación oficial de Zhipu.
     const zhipu = new OpenAI({
       apiKey: process.env.ZHIPUAI_API_KEY,
       baseURL: ZHIPU_BASE_URL
     });
 
-    const completion = await zhipu.chat.completions.create({
-      model: 'glm-4.6v',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: KYC_SYSTEM_PROMPT },
-            {
-              type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${imageBase64}` }
-            }
-          ]
-        }
-      ],
-      temperature: 0.1,
-      // Desactivado: esta es una extracción de OCR simple, no requiere razonamiento
-      // profundo. Activar thinking solo añade latencia y costo sin mejorar el resultado.
-      thinking: { type: 'disabled' }
-    });
+    const completion = await callVisionModelWithFallback(zhipu, imageBase64);
 
     const rawText = completion.choices?.[0]?.message?.content?.trim() || '';
     const parsed = parseKycJson(rawText);
@@ -142,6 +142,40 @@ export default async function handler(req, res) {
       es_documento_valido: false,
       error: 'Ocurrió un error verificando tu documento. Intenta de nuevo.'
     });
+  }
+}
+
+async function callVisionModelWithFallback(zhipu, imageBase64) {
+  const buildPayload = (model) => ({
+    model,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: KYC_SYSTEM_PROMPT },
+          {
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${imageBase64}` }
+          }
+        ]
+      }
+    ],
+    temperature: 0.1,
+    // Desactivado: esta es una extracción de OCR simple, no requiere razonamiento
+    // profundo. Activar thinking solo añade latencia y costo sin mejorar el resultado.
+    thinking: { type: 'disabled' }
+  });
+
+  try {
+    return await zhipu.chat.completions.create(buildPayload(FREE_VISION_MODEL));
+  } catch (err) {
+    const isQuotaError = err?.status === 429 || err?.error?.code === '1113' || err?.code === '1113';
+    if (!isQuotaError) throw err; // otros errores (auth, modelo inválido) no tienen sentido reintentar
+
+    console.error(
+      `[verify-kyc] ${FREE_VISION_MODEL} sin cuota disponible, reintentando con ${FREE_VISION_MODEL_FALLBACK}`
+    );
+    return await zhipu.chat.completions.create(buildPayload(FREE_VISION_MODEL_FALLBACK));
   }
 }
 
