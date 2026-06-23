@@ -28,22 +28,19 @@ export default function App() {
   const [route, setRoute] = useState(() => parseRoute(window.location.pathname));
   const [pacts, setPacts] = useState([]); // pactos del prestador actual (demo: en memoria)
   const [activePact, setActivePact] = useState(null);
-  const [phase, setPhase] = useState('idle'); // idle | draft | signing | sealed
   const [linkCopied, setLinkCopied] = useState(false);
-  // Controla si el usuario sigue viendo la pantalla de "¡Trato cerrado!" (con el sello
-  // y el botón de descarga) en vez de saltar automáticamente al Libro Mayor. El usuario
-  // navega al Libro Mayor explícitamente con el botón "Ir al Libro Mayor →".
-  const [viewingSealedScreen, setViewingSealedScreen] = useState(false);
+  // ÚNICA fuente de verdad sobre qué pantalla mostrar para el pacto activo. Se asigna
+  // explícitamente en cada transición (crear, cargar, sellar) — nunca se "hereda" de
+  // un pacto anterior, a diferencia del viejo esquema con `phase` + `viewingSealedScreen`
+  // como banderas separadas, que podían quedar desincronizadas entre pactos distintos
+  // dentro de la misma sesión del navegador (bug real que causaba saltos de pantalla).
+  //
+  // Valores: 'invitation' | 'notary' | 'sealed' | 'ledger'
+  const [pactUiStep, setPactUiStep] = useState(null);
   // Rol con el que la persona actual está viendo este pacto (lender/borrower). MVP sin
   // login: se recuerda por dispositivo vía localStorage (ver lib/viewerRole.js). null
   // significa "todavía no se sabe" -> se muestra el RoleSelector.
   const [viewerRole, setViewerRole] = useState(null);
-  // Tour de demostración exclusivo para mockPact.json: como ese pacto ya nace "sellado"
-  // (trae seal/hash precalculados), no tiene sentido hacer pasar por KYC o firma real.
-  // En su lugar, se recorren las mismas pantallas (invitación -> sellado -> Libro Mayor)
-  // usando los datos ya existentes del JSON. null = no es un tour; 'invitation' | 'sealed'
-  // | null (listo para Libro Mayor) son los pasos.
-  const [mockTourStep, setMockTourStep] = useState(null);
 
   useEffect(() => {
     const onPop = () => setRoute(parseRoute(window.location.pathname));
@@ -56,11 +53,6 @@ export default function App() {
   useEffect(() => {
     if (route.name === 'pact' && route.uuid) {
       loadPactByUuid(route.uuid);
-      const storedRole = getStoredViewerRole(route.uuid);
-      setViewerRole(storedRole);
-      // El tour del mock solo arranca la primera vez (sin rol guardado todavía);
-      // en visitas siguientes va directo al Libro Mayor, como cualquier pacto real.
-      setMockTourStep(route.uuid === mockPact.id && !storedRole ? 'invitation' : null);
     }
   }, [route]);
 
@@ -75,19 +67,35 @@ export default function App() {
   }, []);
 
   const loadPactByUuid = useCallback(async (uuid) => {
+    // Nota: si `uuid` ya corresponde al pacto recién creado/sellado en esta misma
+    // sesión, ese pacto vive solo en memoria (sin Supabase configurado) y su estado
+    // de paso/rol ya fue asignado explícitamente por handleCreatePact/handlePactSealed.
+    // Las ramas de abajo simplemente no aplican para ese caso (no es Supabase ni mock),
+    // así que no hay nada que sobreescribir.
+    const storedRole = getStoredViewerRole(uuid);
+
     if (isSupabaseConfigured) {
       const { data, error } = await supabase.from('pacts').select('*').eq('id', uuid).single();
       if (!error && data) {
         setActivePact(data);
-        setPhase(data.status === 'draft' ? 'signing' : 'sealed');
+        setViewerRole(storedRole);
+        setPactUiStep(data.status === 'draft' ? 'notary' : 'ledger');
         return;
       }
     }
     // Modo demo: usa el mock si coincide o si no hay Supabase configurado.
-    if (uuid === mockPact.id || !isSupabaseConfigured) {
+    if (uuid === mockPact.id) {
       setActivePact(mockPact);
-      setPhase('sealed');
+      setViewerRole(storedRole);
+      // El tour del mock solo arranca la primera vez (sin rol guardado todavía);
+      // en visitas siguientes va directo al Libro Mayor, como cualquier pacto real.
+      setPactUiStep(storedRole ? 'ledger' : 'invitation');
+      return;
     }
+    // Pacto creado en esta misma sesión (vive solo en memoria de React, sin Supabase
+    // configurado): su estado ya fue asignado por handleCreatePact/handlePactSealed,
+    // no hay nada más que cargar aquí. Si alguien recarga la página en este modo demo
+    // sin backend, el pacto se pierde (no hay persistencia real sin Supabase).
   }, []);
 
   const handleCreatePact = useCallback(async (formData) => {
@@ -114,6 +122,7 @@ export default function App() {
 
     setPacts((prev) => [...prev, newPact]);
     setActivePact(newPact);
+    setPactUiStep('invitation'); // siempre arranca aquí, sin importar el estado previo de otro pacto
     storeViewerRole(newPact.id, 'lender'); // quien crea el pacto es, por definición, el prestador
     setViewerRole('lender');
     navigate(`/pacto/${newPact.id}`);
@@ -166,8 +175,10 @@ export default function App() {
 
     setActivePact(sealedPact);
     setPacts((prev) => prev.map((p) => (p.id === pact.id ? sealedPact : p)));
-    setPhase('sealed');
-    setViewingSealedScreen(true); // mantiene visible la pantalla de "Trato cerrado"
+    // No se cambia uiStep aquí: VirtualNotaryView sigue montado y muestra su propia
+    // pantalla interna de "Trato cerrado" (con el botón de descargar PDF). El padre
+    // solo avanza a 'ledger' cuando el usuario pulsa "Ir al Libro Mayor" desde ahí
+    // (ver onContinueToLedger en PactRouteView).
 
     // Envía el PDF sellado por correo a ambas partes (no bloquea la UI si falla).
     try {
@@ -211,7 +222,7 @@ export default function App() {
     }));
   }, []);
 
-  const meta = resolveMeta(phase, activePact);
+  const meta = resolveMeta(pactUiStep, activePact);
   useDocumentMeta(meta.title, meta.emoji);
 
   return (
@@ -240,18 +251,15 @@ export default function App() {
         {route.name === 'pact' && activePact && (
           <PactRouteView
             pact={activePact}
-            phase={phase}
+            uiStep={pactUiStep}
+            setUiStep={setPactUiStep}
             onPactSealed={handlePactSealed}
             onUploadProof={handleUploadProof}
             onConfirmPayment={handleConfirmPayment}
             linkCopied={linkCopied}
             setLinkCopied={setLinkCopied}
-            viewingSealedScreen={viewingSealedScreen}
-            onContinueToLedger={() => setViewingSealedScreen(false)}
             viewerRole={viewerRole}
             onSelectRole={(role) => handleSelectRole(activePact.id, role)}
-            mockTourStep={mockTourStep}
-            setMockTourStep={setMockTourStep}
           />
         )}
       </main>
@@ -278,81 +286,70 @@ function TopBar({ onLogoClick }) {
 /**
  * Decide qué vista mostrar para un pacto dado:
  *  - ShareInvitationPanel: justo tras crear el pacto, el prestador ve el link para compartir.
- *  - VirtualNotaryView: el deudor verifica identidad y firma (incluye su propia pantalla
- *    final de "Trato cerrado" con el sello, que permanece visible hasta que el usuario
- *    pulse "Ir al Libro Mayor" — viewingSealedScreen controla esto explícitamente para
- *    que el cambio de pact.status a 'active' no la oculte de golpe).
- *  - LedgerDashboard: Fase C, una vez el usuario decide continuar.
+ *  - VirtualNotaryView: el deudor verifica identidad y firma.
+ *  - "sealed": pantalla de "Trato cerrado" (propia o la del mock), visible hasta que
+ *    el usuario pulse "Ir al Libro Mayor" explícitamente.
+ *  - RoleSelector: si el pacto está activo pero no sabemos el rol del visitante.
+ *  - LedgerDashboard: Fase C.
+ *
+ * uiStep es la ÚNICA fuente de verdad de qué mostrar, asignada explícitamente por
+ * App.jsx en cada transición (crear, cargar, sellar) — nunca inferida combinando
+ * varias banderas, que es lo que causaba que el panel de invitación o la pantalla
+ * de sellado se saltaran al crear un pacto nuevo justo después de haber visitado
+ * otro pacto en la misma sesión del navegador.
  */
 function PactRouteView({
   pact,
-  phase,
+  uiStep,
+  setUiStep,
   onPactSealed,
   onUploadProof,
   onConfirmPayment,
   linkCopied,
   setLinkCopied,
-  viewingSealedScreen,
-  onContinueToLedger,
   viewerRole,
-  onSelectRole,
-  mockTourStep,
-  setMockTourStep
+  onSelectRole
 }) {
-  // Tour de demostración del pacto de ejemplo (mockPact.json): recorre las mismas
-  // pantallas que un pacto real (invitación -> sellado) usando los datos de seal ya
-  // precalculados en el JSON, sin pedir foto de cédula ni firma real.
-  if (mockTourStep === 'invitation') {
+  if (uiStep === 'invitation') {
     return (
       <ShareInvitationPanel
         pact={pact}
         linkCopied={linkCopied}
         setLinkCopied={setLinkCopied}
-        onContinue={() => setMockTourStep('sealed')}
+        // El pacto de ejemplo (mock) ya viene con un `seal` precalculado, así que el
+        // botón avanza directo a la pantalla de sellado usando esos datos. Un pacto
+        // real avanza a la Notaría Virtual real (KYC + firma con canvas).
+        onContinue={() => setUiStep(pact.seal ? 'sealed' : 'notary')}
       />
     );
   }
 
-  if (mockTourStep === 'sealed') {
-    return (
-      <MockSealedStep
-        pact={pact}
-        seal={pact.seal}
-        onContinue={() => setMockTourStep(null)}
-      />
-    );
-  }
-
-  const isDraftUnsigned = pact.status === 'draft';
-
-  if (isDraftUnsigned && phase !== 'sealed') {
-    // El prestador, justo tras crear el pacto, ve el panel de invitación.
-    // El deudor (que llega directo al link) ve la Notaría Virtual.
-    const cameFromCreation = phase === 'idle' || phase === 'draft';
-    if (cameFromCreation) {
-      return (
-        <ShareInvitationPanel
-          pact={pact}
-          linkCopied={linkCopied}
-          setLinkCopied={setLinkCopied}
-        />
-      );
-    }
-  }
-
-  if (isDraftUnsigned || viewingSealedScreen) {
+  if (uiStep === 'notary') {
     return (
       <VirtualNotaryView
         pact={pact}
         onPactSealed={onPactSealed}
-        onContinueToLedger={onContinueToLedger}
+        onContinueToLedger={() => setUiStep('ledger')}
       />
     );
   }
 
-  // Pacto activo pero todavía no sabemos si quien lo abre es prestador o deudor
-  // (MVP sin login real — ver lib/viewerRole.js). Se pregunta una sola vez por
-  // dispositivo y se recuerda para las próximas visitas a este mismo pacto.
+  // Este paso es exclusivo del tour del pacto de ejemplo (mockPact.json): como ya
+  // trae un `seal` precalculado (sin pasar por KYC/firma real), se muestra una
+  // versión simplificada de la pantalla de cierre. Un pacto real nunca llega aquí —
+  // su propia pantalla de "Trato cerrado" vive dentro de VirtualNotaryView (uiStep
+  // se queda en 'notary' hasta que el usuario decide continuar desde ahí).
+  if (uiStep === 'sealed') {
+    return (
+      <MockSealedStep
+        pact={pact}
+        seal={pact.seal}
+        onContinue={() => setUiStep('ledger')}
+      />
+    );
+  }
+
+  // uiStep === 'ledger' (o cualquier otro caso ya resuelto): falta decidir el rol.
   if (!viewerRole) {
     return <RoleSelector pact={pact} onSelect={onSelectRole} />;
   }
@@ -406,14 +403,15 @@ function ShareInvitationPanel({ pact, linkCopied, setLinkCopied, onContinue }) {
         <MessageCircle size={17} /> Enviar propuesta por WhatsApp
       </a>
 
-      {/* Solo visible en el tour de demostración del mockPact: simula que el deudor ya
-          recibió el link y avanza a la pantalla de sellado sin pedir foto/firma reales. */}
+      {/* Para pactos reales: permite continuar manualmente a la Notaría Virtual,
+          útil cuando la misma persona está probando ambos roles (prestador y deudor)
+          en el mismo dispositivo, sin tener que abrir el link en otra pestaña. */}
       {onContinue && (
         <button
           onClick={onContinue}
           className="w-full text-sm text-notary-ink/50 hover:text-notary-ink transition-colors py-2"
         >
-          Simular que el deudor ya firmó →
+          {pact.seal ? 'Simular que el deudor ya firmó →' : 'Continuar a la Notaría Virtual →'}
         </button>
       )}
     </div>
@@ -459,9 +457,9 @@ function parseRoute(pathname) {
   return { name: 'home' };
 }
 
-function resolveMeta(phase, pact) {
-  if (phase === 'sealed') return PHASE_META.sealed;
-  if (phase === 'signing') return PHASE_META.signing;
-  if (phase === 'draft' && pact) return PHASE_META.draft(pact.id?.slice(0, 6));
+function resolveMeta(uiStep, pact) {
+  if (uiStep === 'sealed') return PHASE_META.sealed;
+  if (uiStep === 'notary') return PHASE_META.signing;
+  if (uiStep === 'invitation' && pact) return PHASE_META.draft(pact.id?.slice(0, 6));
   return PHASE_META.idle;
 }
