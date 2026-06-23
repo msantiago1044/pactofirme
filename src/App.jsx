@@ -4,9 +4,11 @@ import PactCreationForm from './components/PactCreationForm.jsx';
 import VirtualNotaryView from './components/VirtualNotaryView.jsx';
 import LedgerDashboard from './components/LedgerDashboard.jsx';
 import LenderDashboard from './components/LenderDashboard.jsx';
+import RoleSelector from './components/RoleSelector.jsx';
 import { useDocumentMeta, PHASE_META } from './lib/useDocumentMeta.js';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient.js';
 import { pagarePDFBase64 } from './lib/generatePagarePDF.js';
+import { getStoredViewerRole, storeViewerRole } from './lib/viewerRole.js';
 import mockPact from '../mockPact.json';
 
 /**
@@ -31,6 +33,10 @@ export default function App() {
   // y el botón de descarga) en vez de saltar automáticamente al Libro Mayor. El usuario
   // navega al Libro Mayor explícitamente con el botón "Ir al Libro Mayor →".
   const [viewingSealedScreen, setViewingSealedScreen] = useState(false);
+  // Rol con el que la persona actual está viendo este pacto (lender/borrower). MVP sin
+  // login: se recuerda por dispositivo vía localStorage (ver lib/viewerRole.js). null
+  // significa "todavía no se sabe" -> se muestra el RoleSelector.
+  const [viewerRole, setViewerRole] = useState(null);
 
   useEffect(() => {
     const onPop = () => setRoute(parseRoute(window.location.pathname));
@@ -38,10 +44,12 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  // Al cargar /pacto/:uuid directamente (ej. el deudor abre el link), busca el pacto.
+  // Al cargar /pacto/:uuid directamente (ej. el deudor abre el link), busca el pacto
+  // y recupera el rol que esta persona eligió antes en este dispositivo (si alguno).
   useEffect(() => {
     if (route.name === 'pact' && route.uuid) {
       loadPactByUuid(route.uuid);
+      setViewerRole(getStoredViewerRole(route.uuid));
     }
   }, [route]);
 
@@ -49,6 +57,11 @@ export default function App() {
     window.history.pushState({}, '', path);
     setRoute(parseRoute(path));
   };
+
+  const handleSelectRole = useCallback((pactId, role) => {
+    storeViewerRole(pactId, role);
+    setViewerRole(role);
+  }, []);
 
   const loadPactByUuid = useCallback(async (uuid) => {
     if (isSupabaseConfigured) {
@@ -90,6 +103,8 @@ export default function App() {
 
     setPacts((prev) => [...prev, newPact]);
     setActivePact(newPact);
+    storeViewerRole(newPact.id, 'lender'); // quien crea el pacto es, por definición, el prestador
+    setViewerRole('lender');
     navigate(`/pacto/${newPact.id}`);
   }, []);
 
@@ -110,6 +125,11 @@ export default function App() {
         }));
 
     const sealedPact = { ...pact, status: 'active', contract_hash: seal.hash, installments };
+
+    // Quien acaba de firmar (pasó por KYC) es, por definición, el deudor — se guarda
+    // su rol automáticamente para que no tenga que elegir en el RoleSelector después.
+    storeViewerRole(pact.id, 'borrower');
+    setViewerRole('borrower');
 
     if (isSupabaseConfigured) {
       // RLS bloquea cambios a contract_hash/amount una vez 'active'; este UPDATE
@@ -217,6 +237,8 @@ export default function App() {
             setLinkCopied={setLinkCopied}
             viewingSealedScreen={viewingSealedScreen}
             onContinueToLedger={() => setViewingSealedScreen(false)}
+            viewerRole={viewerRole}
+            onSelectRole={(role) => handleSelectRole(activePact.id, role)}
           />
         )}
       </main>
@@ -258,7 +280,9 @@ function PactRouteView({
   linkCopied,
   setLinkCopied,
   viewingSealedScreen,
-  onContinueToLedger
+  onContinueToLedger,
+  viewerRole,
+  onSelectRole
 }) {
   const isDraftUnsigned = pact.status === 'draft';
 
@@ -287,11 +311,18 @@ function PactRouteView({
     );
   }
 
+  // Pacto activo pero todavía no sabemos si quien lo abre es prestador o deudor
+  // (MVP sin login real — ver lib/viewerRole.js). Se pregunta una sola vez por
+  // dispositivo y se recuerda para las próximas visitas a este mismo pacto.
+  if (!viewerRole) {
+    return <RoleSelector pact={pact} onSelect={onSelectRole} />;
+  }
+
   return (
     <LedgerDashboard
       pact={pact}
       installments={pact.installments || []}
-      role={pact.viewer_role || 'lender'}
+      role={viewerRole}
       onUploadProof={onUploadProof}
       onConfirmPayment={onConfirmPayment}
     />
