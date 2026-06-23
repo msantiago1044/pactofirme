@@ -22,7 +22,7 @@ export default async function handler(req, res) {
 
   try {
     const { error } = await resend.emails.send({
-      from: 'PactoFirme <notario@pactofirme.app>',
+      from: 'PactoFirme <onboarding@resend.dev>',
       to: recipients,
       subject: `Pagaré sellado — Pacto #${(pactId || '').slice(0, 8)}`,
       html: `
