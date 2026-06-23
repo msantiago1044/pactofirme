@@ -29,13 +29,11 @@ import { createClient } from '@supabase/supabase-js';
 const ZHIPU_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4/';
 const KYC_BUCKET = 'kyc-temp';
 
-// Modelos de visión 100% gratuitos confirmados en la documentación oficial de Zhipu
-// (https://docs.bigmodel.cn/cn/guide/models/free/...). Se intenta primero el modelo
-// más reciente; si responde con error de cuota/saldo (status 429, code 1113), se
-// reintenta automáticamente con el modelo de respaldo, evitando que un agotamiento
-// puntual de cupo tumbe todo el flujo de KYC.
+// Modelo de visión gratuito confirmado en el enum oficial de la especificación OpenAPI
+// de Zhipu (ChatCompletionVisionRequest.model). Es el único modelo gratuito de esa lista
+// que soporta imágenes en Base64 — GLM-4V-Flash (el legacy) está limitado a 1 imagen y
+// NO soporta Base64, por lo que no sirve como respaldo para este flujo.
 const FREE_VISION_MODEL = 'glm-4.6v-flash';
-const FREE_VISION_MODEL_FALLBACK = 'glm-4v-flash'; // el primer modelo gratuito de Zhipu
 
 const KYC_SYSTEM_PROMPT = `Eres un oficial de cumplimiento (KYC) digital. Analiza la imagen adjunta. Verifica que corresponda a un documento de identidad oficial (Cédula de ciudadanía, DNI o Pasaporte). Extrae estrictamente estos dos datos y devuélvelos en un JSON limpio:
 {
@@ -98,7 +96,7 @@ export default async function handler(req, res) {
       baseURL: ZHIPU_BASE_URL
     });
 
-    const completion = await callVisionModelWithFallback(zhipu, imageBase64);
+    const completion = await callVisionModel(zhipu, imageBase64);
 
     const rawText = completion.choices?.[0]?.message?.content?.trim() || '';
     const parsed = parseKycJson(rawText);
@@ -130,14 +128,30 @@ export default async function handler(req, res) {
     // expone status + código + mensaje, que es lo más útil para diagnosticar rápido
     // problemas como modelo inválido, key inválida, o sin saldo — sin tener que leer
     // el stack trace completo cada vez.
+    const zhipuCode = err?.code || err?.error?.code;
     if (err?.status) {
       console.error(
-        `[verify-kyc] Error de la API de Zhipu — status=${err.status} code=${err.code || err.error?.code} message=${err.error?.message || err.message}`
+        `[verify-kyc] Error de la API de Zhipu — status=${err.status} code=${zhipuCode} message=${err.error?.message || err.message}`
       );
     } else {
       console.error('[verify-kyc] Error inesperado:', err);
     }
     if (tempImagePath) await safeDeleteTempImage(supabaseAdmin, tempImagePath);
+
+    // Error de cuota/saldo (code 1113): esto es un problema de configuración de la
+    // cuenta de Zhipu, no del documento subido por el usuario. Se distingue para que
+    // quien opera la app sepa exactamente qué revisar (panel de Zhipu > Finanzas/
+    // verificación de identidad para activar el cupo gratuito), en vez de pensar que
+    // la app está rota.
+    if (err?.status === 429 || zhipuCode === '1113') {
+      return res.status(503).json({
+        es_documento_valido: false,
+        error:
+          'El servicio de verificación no tiene cupo disponible en este momento. ' +
+          'Si eres el operador de la plataforma: revisa el saldo/cuota de tu cuenta de ZhipuAI.'
+      });
+    }
+
     return res.status(500).json({
       es_documento_valido: false,
       error: 'Ocurrió un error verificando tu documento. Intenta de nuevo.'
@@ -145,9 +159,9 @@ export default async function handler(req, res) {
   }
 }
 
-async function callVisionModelWithFallback(zhipu, imageBase64) {
-  const buildPayload = (model) => ({
-    model,
+async function callVisionModel(zhipu, imageBase64) {
+  return zhipu.chat.completions.create({
+    model: FREE_VISION_MODEL,
     messages: [
       {
         role: 'user',
@@ -165,18 +179,6 @@ async function callVisionModelWithFallback(zhipu, imageBase64) {
     // profundo. Activar thinking solo añade latencia y costo sin mejorar el resultado.
     thinking: { type: 'disabled' }
   });
-
-  try {
-    return await zhipu.chat.completions.create(buildPayload(FREE_VISION_MODEL));
-  } catch (err) {
-    const isQuotaError = err?.status === 429 || err?.error?.code === '1113' || err?.code === '1113';
-    if (!isQuotaError) throw err; // otros errores (auth, modelo inválido) no tienen sentido reintentar
-
-    console.error(
-      `[verify-kyc] ${FREE_VISION_MODEL} sin cuota disponible, reintentando con ${FREE_VISION_MODEL_FALLBACK}`
-    );
-    return await zhipu.chat.completions.create(buildPayload(FREE_VISION_MODEL_FALLBACK));
-  }
 }
 
 function parseKycJson(rawText) {

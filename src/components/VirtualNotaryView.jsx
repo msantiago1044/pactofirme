@@ -16,7 +16,7 @@ import { downloadPagarePDF, pagarePDFBase64 } from '../lib/generatePagarePDF.js'
  * Nota de privacidad: la imagen de cédula se sube a almacenamiento temporal y se borra
  * inmediatamente después de confirmarse el sello (ver onPactSealed -> cleanupKycImage).
  */
-export default function VirtualNotaryView({ pact, onPactSealed }) {
+export default function VirtualNotaryView({ pact, onPactSealed, onContinueToLedger }) {
   const [step, setStep] = useState('review'); // review -> kyc -> sign -> sealed
   const [kycStatus, setKycStatus] = useState('idle'); // idle | loading | error
   const [kycError, setKycError] = useState('');
@@ -128,7 +128,12 @@ export default function VirtualNotaryView({ pact, onPactSealed }) {
       )}
 
       {step === 'sealed' && sealResult && (
-        <SealedStep pact={pact} seal={sealResult} onDownload={handleDownloadPDF} />
+        <SealedStep
+          pact={pact}
+          seal={sealResult}
+          onDownload={handleDownloadPDF}
+          onContinue={onContinueToLedger}
+        />
       )}
     </div>
   );
@@ -251,7 +256,7 @@ function SignStep({ pact, onConfirm }) {
   );
 }
 
-function SealedStep({ pact, seal, onDownload }) {
+function SealedStep({ pact, seal, onDownload, onContinue }) {
   return (
     <div className="space-y-6 text-center">
       <div className="flex justify-center">
@@ -277,6 +282,13 @@ function SealedStep({ pact, seal, onDownload }) {
         className="w-full flex items-center justify-center gap-2 bg-notary-ink text-notary-paperWarm py-3.5 font-medium tracking-wide hover:bg-notary-inkLight transition-colors"
       >
         <CheckCircle2 size={17} /> Descargar Pagaré en PDF
+      </button>
+
+      <button
+        onClick={onContinue}
+        className="w-full text-sm text-notary-ink/50 hover:text-notary-ink transition-colors py-2"
+      >
+        Ir al Libro Mayor →
       </button>
     </div>
   );

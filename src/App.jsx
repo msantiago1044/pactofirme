@@ -27,6 +27,10 @@ export default function App() {
   const [activePact, setActivePact] = useState(null);
   const [phase, setPhase] = useState('idle'); // idle | draft | signing | sealed
   const [linkCopied, setLinkCopied] = useState(false);
+  // Controla si el usuario sigue viendo la pantalla de "¡Trato cerrado!" (con el sello
+  // y el botón de descarga) en vez de saltar automáticamente al Libro Mayor. El usuario
+  // navega al Libro Mayor explícitamente con el botón "Ir al Libro Mayor →".
+  const [viewingSealedScreen, setViewingSealedScreen] = useState(false);
 
   useEffect(() => {
     const onPop = () => setRoute(parseRoute(window.location.pathname));
@@ -90,7 +94,22 @@ export default function App() {
   }, []);
 
   const handlePactSealed = useCallback(async ({ pact, seal }) => {
-    const sealedPact = { ...pact, status: 'active', contract_hash: seal.hash };
+    // FIX: PactCreationForm guarda el array de cuotas calculado como `schedule`,
+    // pero LedgerDashboard (Fase C) lee `installments`. Sin este mapeo, el pacto
+    // queda sellado con status='active' pero sin cuotas visibles — el Libro Mayor
+    // muestra 0% / $0 / vacío aunque el préstamo sí tenga monto y plazo.
+    const installments = (pact.installments && pact.installments.length > 0)
+      ? pact.installments
+      : (pact.schedule || []).map((row) => ({
+          installment_number: row.installment_number,
+          due_date: row.due_date,
+          amount_due: row.amount_due,
+          status: 'pending',
+          proof_image_url: null,
+          paid_at: null
+        }));
+
+    const sealedPact = { ...pact, status: 'active', contract_hash: seal.hash, installments };
 
     if (isSupabaseConfigured) {
       // RLS bloquea cambios a contract_hash/amount una vez 'active'; este UPDATE
@@ -99,11 +118,25 @@ export default function App() {
         status: 'active',
         contract_hash: seal.hash
       }).eq('id', pact.id);
+
+      // Inserta las cuotas calculadas en la tabla installments (solo la primera vez).
+      if (installments.length > 0) {
+        await supabase.from('installments').insert(
+          installments.map((i) => ({
+            pact_id: pact.id,
+            installment_number: i.installment_number,
+            due_date: i.due_date,
+            amount_due: i.amount_due,
+            status: 'pending'
+          }))
+        );
+      }
     }
 
     setActivePact(sealedPact);
     setPacts((prev) => prev.map((p) => (p.id === pact.id ? sealedPact : p)));
     setPhase('sealed');
+    setViewingSealedScreen(true); // mantiene visible la pantalla de "Trato cerrado"
 
     // Envía el PDF sellado por correo a ambas partes (no bloquea la UI si falla).
     try {
@@ -182,6 +215,8 @@ export default function App() {
             onConfirmPayment={handleConfirmPayment}
             linkCopied={linkCopied}
             setLinkCopied={setLinkCopied}
+            viewingSealedScreen={viewingSealedScreen}
+            onContinueToLedger={() => setViewingSealedScreen(false)}
           />
         )}
       </main>
@@ -206,11 +241,25 @@ function TopBar({ onLogoClick }) {
 }
 
 /**
- * Decide si mostrar la Notaría Virtual (Fase B, pacto aún sin firmar) o el
- * Libro Mayor (Fase C, pacto ya activo). Justo después de sellarse, muestra el
- * panel de "compartir enlace" antes de pasar al libro mayor.
+ * Decide qué vista mostrar para un pacto dado:
+ *  - ShareInvitationPanel: justo tras crear el pacto, el prestador ve el link para compartir.
+ *  - VirtualNotaryView: el deudor verifica identidad y firma (incluye su propia pantalla
+ *    final de "Trato cerrado" con el sello, que permanece visible hasta que el usuario
+ *    pulse "Ir al Libro Mayor" — viewingSealedScreen controla esto explícitamente para
+ *    que el cambio de pact.status a 'active' no la oculte de golpe).
+ *  - LedgerDashboard: Fase C, una vez el usuario decide continuar.
  */
-function PactRouteView({ pact, phase, onPactSealed, onUploadProof, onConfirmPayment, linkCopied, setLinkCopied }) {
+function PactRouteView({
+  pact,
+  phase,
+  onPactSealed,
+  onUploadProof,
+  onConfirmPayment,
+  linkCopied,
+  setLinkCopied,
+  viewingSealedScreen,
+  onContinueToLedger
+}) {
   const isDraftUnsigned = pact.status === 'draft';
 
   if (isDraftUnsigned && phase !== 'sealed') {
@@ -228,8 +277,14 @@ function PactRouteView({ pact, phase, onPactSealed, onUploadProof, onConfirmPaym
     }
   }
 
-  if (pact.status === 'draft') {
-    return <VirtualNotaryView pact={pact} onPactSealed={onPactSealed} />;
+  if (isDraftUnsigned || viewingSealedScreen) {
+    return (
+      <VirtualNotaryView
+        pact={pact}
+        onPactSealed={onPactSealed}
+        onContinueToLedger={onContinueToLedger}
+      />
+    );
   }
 
   return (

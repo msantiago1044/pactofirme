@@ -21,6 +21,9 @@ export default async function handler(req, res) {
   const recipients = [lenderEmail, borrowerEmail].filter(Boolean);
 
   try {
+    // NOTA: 'onboarding@resend.dev' es el remitente de pruebas de Resend, funciona sin
+    // verificar dominio propio. Cuando verifiques tu dominio en resend.com/domains,
+    // cambia esto a algo como 'PactoFirme <notario@tudominio.com>'.
     const { error } = await resend.emails.send({
       from: 'PactoFirme <onboarding@resend.dev>',
       to: recipients,
@@ -44,7 +47,19 @@ export default async function handler(req, res) {
     });
 
     if (error) {
-      console.error('[send-pagare-email] Resend error:', error);
+      // Error típico en modo de prueba de Resend (sin dominio verificado): solo permite
+      // enviar al correo propio de la cuenta, y el remitente debe ser de un dominio
+      // verificado en resend.com/domains (o el dominio de pruebas onboarding@resend.dev).
+      // Esto no es un bug de la app — es la cuenta de Resend en modo sandbox.
+      if (error.name === 'validation_error') {
+        console.error(
+          `[send-pagare-email] Resend en modo de prueba — solo permite enviar al correo verificado de la cuenta. ` +
+          `Para enviar a otros destinatarios: verifica un dominio en resend.com/domains y usa ese dominio en "from". ` +
+          `Detalle: ${error.message}`
+        );
+      } else {
+        console.error('[send-pagare-email] Resend error:', error);
+      }
       return res.status(500).json({ sent: false, error: error.message });
     }
 
