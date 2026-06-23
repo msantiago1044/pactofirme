@@ -5,6 +5,7 @@ import VirtualNotaryView from './components/VirtualNotaryView.jsx';
 import LedgerDashboard from './components/LedgerDashboard.jsx';
 import LenderDashboard from './components/LenderDashboard.jsx';
 import RoleSelector from './components/RoleSelector.jsx';
+import NotarySeal from './components/NotarySeal.jsx';
 import { useDocumentMeta, PHASE_META } from './lib/useDocumentMeta.js';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient.js';
 import { pagarePDFBase64 } from './lib/generatePagarePDF.js';
@@ -37,6 +38,12 @@ export default function App() {
   // login: se recuerda por dispositivo vía localStorage (ver lib/viewerRole.js). null
   // significa "todavía no se sabe" -> se muestra el RoleSelector.
   const [viewerRole, setViewerRole] = useState(null);
+  // Tour de demostración exclusivo para mockPact.json: como ese pacto ya nace "sellado"
+  // (trae seal/hash precalculados), no tiene sentido hacer pasar por KYC o firma real.
+  // En su lugar, se recorren las mismas pantallas (invitación -> sellado -> Libro Mayor)
+  // usando los datos ya existentes del JSON. null = no es un tour; 'invitation' | 'sealed'
+  // | null (listo para Libro Mayor) son los pasos.
+  const [mockTourStep, setMockTourStep] = useState(null);
 
   useEffect(() => {
     const onPop = () => setRoute(parseRoute(window.location.pathname));
@@ -49,7 +56,11 @@ export default function App() {
   useEffect(() => {
     if (route.name === 'pact' && route.uuid) {
       loadPactByUuid(route.uuid);
-      setViewerRole(getStoredViewerRole(route.uuid));
+      const storedRole = getStoredViewerRole(route.uuid);
+      setViewerRole(storedRole);
+      // El tour del mock solo arranca la primera vez (sin rol guardado todavía);
+      // en visitas siguientes va directo al Libro Mayor, como cualquier pacto real.
+      setMockTourStep(route.uuid === mockPact.id && !storedRole ? 'invitation' : null);
     }
   }, [route]);
 
@@ -239,6 +250,8 @@ export default function App() {
             onContinueToLedger={() => setViewingSealedScreen(false)}
             viewerRole={viewerRole}
             onSelectRole={(role) => handleSelectRole(activePact.id, role)}
+            mockTourStep={mockTourStep}
+            setMockTourStep={setMockTourStep}
           />
         )}
       </main>
@@ -282,8 +295,34 @@ function PactRouteView({
   viewingSealedScreen,
   onContinueToLedger,
   viewerRole,
-  onSelectRole
+  onSelectRole,
+  mockTourStep,
+  setMockTourStep
 }) {
+  // Tour de demostración del pacto de ejemplo (mockPact.json): recorre las mismas
+  // pantallas que un pacto real (invitación -> sellado) usando los datos de seal ya
+  // precalculados en el JSON, sin pedir foto de cédula ni firma real.
+  if (mockTourStep === 'invitation') {
+    return (
+      <ShareInvitationPanel
+        pact={pact}
+        linkCopied={linkCopied}
+        setLinkCopied={setLinkCopied}
+        onContinue={() => setMockTourStep('sealed')}
+      />
+    );
+  }
+
+  if (mockTourStep === 'sealed') {
+    return (
+      <MockSealedStep
+        pact={pact}
+        seal={pact.seal}
+        onContinue={() => setMockTourStep(null)}
+      />
+    );
+  }
+
   const isDraftUnsigned = pact.status === 'draft';
 
   if (isDraftUnsigned && phase !== 'sealed') {
@@ -329,7 +368,7 @@ function PactRouteView({
   );
 }
 
-function ShareInvitationPanel({ pact, linkCopied, setLinkCopied }) {
+function ShareInvitationPanel({ pact, linkCopied, setLinkCopied, onContinue }) {
   const link = `${window.location.origin}/pacto/${pact.id}`;
   const whatsappText = encodeURIComponent(
     `${pact.lender_name} te invita a formalizar un préstamo en PactoFirme: ${link}`
@@ -366,6 +405,48 @@ function ShareInvitationPanel({ pact, linkCopied, setLinkCopied }) {
       >
         <MessageCircle size={17} /> Enviar propuesta por WhatsApp
       </a>
+
+      {/* Solo visible en el tour de demostración del mockPact: simula que el deudor ya
+          recibió el link y avanza a la pantalla de sellado sin pedir foto/firma reales. */}
+      {onContinue && (
+        <button
+          onClick={onContinue}
+          className="w-full text-sm text-notary-ink/50 hover:text-notary-ink transition-colors py-2"
+        >
+          Simular que el deudor ya firmó →
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MockSealedStep({ pact, seal, onContinue }) {
+  return (
+    <div className="max-w-md mx-auto px-5 py-8 space-y-6 text-center">
+      <div className="flex justify-center">
+        <NotarySeal animate size="lg" />
+      </div>
+
+      <div>
+        <h2 className="font-serif text-2xl text-notary-ink">¡Trato cerrado!</h2>
+        <p className="text-sm text-notary-ink/60 mt-2">
+          Este es el pacto de ejemplo, ya firmado previamente por {seal?.nombreCompleto || 'el deudor'}.
+        </p>
+      </div>
+
+      <div className="folio-border bg-notary-paperWarm p-4 text-left">
+        <p className="text-[10px] uppercase tracking-wide text-notary-ink/40 mb-1">Sello criptográfico</p>
+        <p className="font-mono text-[11px] text-notary-ink/70 break-all">{seal?.hash}</p>
+        <p className="font-mono text-[11px] text-notary-ink/50 mt-2">{seal?.timestampUTC}</p>
+        <p className="font-mono text-[11px] text-notary-ink/50">IP: {seal?.ip}</p>
+      </div>
+
+      <button
+        onClick={onContinue}
+        className="w-full inline-flex items-center justify-center gap-2 bg-notary-ink text-notary-paperWarm py-3.5 font-medium tracking-wide hover:bg-notary-inkLight transition-colors"
+      >
+        Ir al Libro Mayor →
+      </button>
     </div>
   );
 }

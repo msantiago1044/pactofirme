@@ -28,3 +28,16 @@ export function storeViewerRole(pactId, role) {
     // no-op: si falla, simplemente se volverá a preguntar la próxima vez
   }
 }
+
+/**
+ * Borra el rol guardado para un pacto. Se usa, por ejemplo, para reiniciar el tour
+ * de demostración del mockPact y poder volver a recorrer invitación -> sellado ->
+ * selector de rol desde cero.
+ */
+export function clearStoredViewerRole(pactId) {
+  try {
+    localStorage.removeItem(`${STORAGE_PREFIX}${pactId}`);
+  } catch {
+    // no-op
+  }
+}

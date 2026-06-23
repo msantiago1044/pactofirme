@@ -1,8 +1,10 @@
 import { useState, useRef } from 'react';
-import { Upload, Clock, CheckCircle2, AlertCircle, Receipt, ImagePlus } from 'lucide-react';
+import { Upload, Clock, CheckCircle2, AlertCircle, Receipt, ImagePlus, RotateCcw } from 'lucide-react';
 import { formatCOP } from '../lib/amortization.js';
 import DebtProgressBar from './DebtProgressBar.jsx';
 import EmptyState from './EmptyState.jsx';
+import { clearStoredViewerRole } from '../lib/viewerRole.js';
+import mockPact from '../../mockPact.json';
 
 const STATUS_CONFIG = {
   pending: { label: 'Pendiente', icon: Clock, color: 'text-notary-ink/40' },
@@ -57,6 +59,20 @@ export default function LedgerDashboard({ pact, installments, role, onUploadProo
           </ul>
         )}
       </section>
+
+      {pact.id === mockPact.id && (
+        <div className="pt-4 border-t border-notary-line/50 text-center">
+          <button
+            onClick={() => {
+              clearStoredViewerRole(pact.id);
+              window.location.reload();
+            }}
+            className="inline-flex items-center gap-1.5 text-xs text-notary-ink/40 hover:text-notary-ink transition-colors"
+          >
+            <RotateCcw size={12} /> Reiniciar demostración (volver a ver invitación + firma)
+          </button>
+        </div>
+      )}
     </div>
   );
 }
