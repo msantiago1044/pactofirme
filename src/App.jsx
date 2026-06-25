@@ -10,6 +10,7 @@ import { useDocumentMeta, PHASE_META } from './lib/useDocumentMeta.js';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient.js';
 import { pagarePDFBase64 } from './lib/generatePagarePDF.js';
 import { getStoredViewerRole, storeViewerRole } from './lib/viewerRole.js';
+import { buildAmortizationSchedule } from './lib/amortization.js';
 import mockPact from '../mockPact.json';
 
 /**
@@ -50,8 +51,13 @@ export default function App() {
 
   // Al cargar /pacto/:uuid directamente (ej. el deudor abre el link), busca el pacto
   // y recupera el rol que esta persona eligió antes en este dispositivo (si alguno).
+  // Se omite por completo si `uuid` ya corresponde al pacto que tenemos en memoria
+  // (por ejemplo, justo después de crearlo con handleCreatePact) — de lo contrario,
+  // esta carga asíncrona puede "ganarle la carrera" al estado recién asignado y
+  // sobrescribir el pacto completo con una versión parcial de Supabase (que no
+  // guarda campos como `schedule`/`installment_amount`, solo usados en memoria).
   useEffect(() => {
-    if (route.name === 'pact' && route.uuid) {
+    if (route.name === 'pact' && route.uuid && route.uuid !== activePact?.id) {
       loadPactByUuid(route.uuid);
     }
   }, [route]);
@@ -77,7 +83,40 @@ export default function App() {
     if (isSupabaseConfigured) {
       const { data, error } = await supabase.from('pacts').select('*').eq('id', uuid).single();
       if (!error && data) {
-        setActivePact(data);
+        // `installment_amount`/`schedule` son campos DERIVADOS que solo existían en
+        // memoria al crear el pacto — la tabla `pacts` no los persiste (serían
+        // redundantes con amount/interest_rate/installments_count/frequency, que sí
+        // se guardan). Se recalculan aquí siempre, para que ReviewStep nunca muestre
+        // $0 por depender de un campo que la base de datos nunca tuvo.
+        const recalculated = buildAmortizationSchedule(
+          data.amount,
+          data.interest_rate,
+          data.installments_count,
+          data.frequency || 'monthly'
+        );
+
+        let installments = recalculated.schedule;
+        if (data.status === 'active') {
+          // Pacto ya sellado: las cuotas reales (con su status pending/reviewing/paid
+          // real) viven en la tabla `installments`, no en el recálculo en memoria.
+          const { data: realInstallments } = await supabase
+            .from('installments')
+            .select('*')
+            .eq('pact_id', uuid)
+            .order('installment_number', { ascending: true });
+          if (realInstallments && realInstallments.length > 0) {
+            installments = realInstallments;
+          }
+        }
+
+        const hydratedPact = {
+          ...data,
+          schedule: recalculated.schedule,
+          installment_amount: recalculated.installmentAmount,
+          total_to_pay: recalculated.totalToPay,
+          installments
+        };
+        setActivePact(hydratedPact);
         setViewerRole(storedRole);
         setPactUiStep(data.status === 'draft' ? 'notary' : 'ledger');
         return;
@@ -116,6 +155,7 @@ export default function App() {
         amount: newPact.amount,
         interest_rate: newPact.interest_rate,
         installments_count: newPact.installments_count,
+        frequency: newPact.frequency,
         status: 'draft'
       }]);
     }
